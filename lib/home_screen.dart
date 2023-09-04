@@ -1,85 +1,98 @@
-import 'dart:convert'; // Import thư viện để xử lý JSON
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:web_socket_channel/io.dart';
+import 'dart:async';
+
+void main() {
+  runApp(MyApp());
+}
+
+class MyApp extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      home: HomeScreen(),
+    );
+  }
+}
 
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key});
-
   @override
-  State<HomeScreen> createState() => _HomeScreenState();
+  _HomeScreenState createState() => _HomeScreenState();
 }
 
 class _HomeScreenState extends State<HomeScreen> {
   final channel = IOWebSocketChannel.connect('wss://sockets.stg.ojyuken-support.com/app/CXJk25jXbbDU1yLqb7NLKRwIUMADNXH5');
-  String? channelName;
-  String eventName = '';
-  Map<String, dynamic> eventData = {};
+  final streamController = StreamController<String>.broadcast();
+  late Timer pingTimer;
 
   @override
   void initState() {
     super.initState();
-    // Gửi yêu cầu đăng ký vào kênh sau khi kết nối WebSocket
-    final request = {
-      'event': 'pusher:subscribe',
-      'data': {'auth': '', 'channel': 'juken_app'},
-    };
 
-    // Chuyển đối tượng JSON thành chuỗi và gửi đi
-    channel.sink.add(jsonEncode(request));
-
-
-    channel.stream.listen((message) {
-      // Parse JSON từ chuỗi nhận được
-      final Map<String, dynamic> jsonData = jsonDecode(message);
-
-      // Trích xuất channel và event từ JSON
-      channelName = jsonData['channel'] as String? ?? ''; // Kiểm tra và gán mặc định là chuỗi rỗng nếu giá trị là null
-      eventName = jsonData['event'] as String? ?? '';
-
-      // Kiểm tra xem có phải là sự kiện bạn quan tâm không
-      if (channelName == 'juken_app' && eventName == 'comment_today') {
-        // Trích xuất dữ liệu từ JSON
-        eventData = jsonDecode(jsonData['data'] as String? ?? '{}'); // Kiểm tra và gán mặc định là JSON rỗng nếu giá trị là null
-
-        // Cập nhật giao diện khi nhận được dữ liệu mới
-        setState(() {
-          print('khang check');
-        });
-      } else if (channelName == 'juken_app') {
-        eventData = jsonDecode(jsonData['data'] as String? ?? '{}'); // Kiểm tra và gán mặc định là JSON rỗng nếu giá trị là null
-
-        // Cập nhật giao diện khi nhận được dữ liệu mới
-        setState(() {});
-      }
+    channel.stream.listen((data) {
+      streamController.sink.add(data);
+    }, onDone: () {
+      streamController.close();
     });
+
+    // Send a Pusher subscription message to the server
+    final subscriptionMessage = {
+      "event": "pusher:subscribe",
+      "data": {
+        "auth": "",
+        "channel": "juken_app"
+      }
+    };
+    channel.sink.add(jsonEncode(subscriptionMessage));
+
+    // Schedule a ping message every 30 seconds
+    pingTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      final pingMessage = {
+        "event": "pusher:ping",
+        "data": {}
+      };
+      channel.sink.add(jsonEncode(pingMessage));
+    });
+  }
+
+  @override
+  void dispose() {
+    channel.sink.close(); // Close the WebSocket connection
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text('WebSocket Demo'),
+        title: Text('WebSocket Example'),
       ),
-      body: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: <Widget>[
-            if (channelName != null) ...[
-              Text('Channel: $channelName'),
-              Text('Event: $eventName'),
-              Text('Data: ${eventData.toString()}'),
-            ] else ...[
-              const Text('Event: null'),
-            ]
-          ],
-        ),
+      body: StreamBuilder(
+        stream: streamController.stream,
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.active) {
+            if (snapshot.hasData) {
+              return Center(
+                child: Text(snapshot.data.toString()),
+              );
+            } else {
+              return Center(
+                child: Text('No data received.'),
+              );
+            }
+          } else if (snapshot.connectionState == ConnectionState.waiting) {
+            return Center(
+              child: CircularProgressIndicator(),
+            );
+          } else {
+            return Center(
+              child: Text('Connection error'),
+            );
+          }
+        },
       ),
     );
-  }
-
-  @override
-  void dispose() {
-    channel.sink.close();
-    super.dispose();
   }
 }
